@@ -91,6 +91,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
 venv\Scripts\Activate.ps1
 ```
 
+## Screenshots
+
+### Upload Interface
+
+![Upload Interface](screenshots/upload-ui.png)
+
+### Analysis Results
+
+![Analysis Results](screenshots/result-ui.png)
+
 Install dependencies:
 
 ```bash
