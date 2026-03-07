@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio-Decoded</title>
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+    <main class="app-shell fade-sequence">
+        <section class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow reveal">Audio Analysis Platform</p>
+                <h1 class="reveal delay-1">Audio-Decoded</h1>
+                <p class="subtitle reveal delay-2">
+                    Drop in a track or record through your microphone to detect its BPM and key.
+                    If the key is ambiguous, both likely keys will be shown.
+                </p>
+            </div>
+
+            <div class="hero-results reveal delay-3">
+                <div class="result-panel">
+                    <div class="result-header">
+                        <span>Current Result</span>
+                        <span id="statusPill" class="status idle">Idle</span>
+                    </div>
+
+                    <div class="result-grid">
+                        <div class="metric-card">
+                            <p class="metric-label">BPM</p>
+                            <h2 id="bpmValue" class="result-value">--</h2>
+                        </div>
+                        <div class="metric-card">
+                            <p class="metric-label">Key</p>
+                            <h2 id="keyValue" class="result-value">--</h2>
+                        </div>
+                    </div>
+
+                    <p id="resultNote" class="result-note">
+                        Upload a file or record audio to begin.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <section class="actions-grid">
+            <div class="panel reveal delay-4">
+                <div class="panel-header">
+                    <h3>Upload Audio</h3>
+                    <p>Drag and drop or browse for a file.</p>
+                </div>
+
+                <div id="dropZone" class="drop-zone">
+                    <input id="fileInput" type="file" accept=".mp3,.wav,.flac,.ogg,.m4a,.aac,.webm" hidden />
+                    <div class="drop-zone-content">
+                        <p class="drop-title">Drop audio here</p>
+                        <p class="drop-subtitle">MP3, WAV, FLAC, OGG, M4A, AAC, WEBM</p>
+                        <button id="browseButton" class="primary-btn" type="button">Browse Files</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel reveal delay-5">
+                <div class="panel-header">
+                    <h3>Live Microphone Scan</h3>
+                    <p>Record from your mic, then analyze BPM and key.</p>
+                </div>
+
+                <div class="mic-area">
+                    <div class="mic-visual">
+                        <div id="micDot" class="mic-dot"></div>
+                        <p id="micStatus">Microphone idle</p>
+                    </div>
+
+                    <div class="mic-buttons">
+                        <button id="startMicButton" class="primary-btn" type="button">Start Listening</button>
+                        <button id="stopMicButton" class="secondary-btn" type="button" disabled>Stop & Analyze</button>
+                    </div>
+
+                    <p class="mic-tip">
+                        Best results come from 10 to 20 seconds of clear music near the microphone.
+                    </p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="app-footer reveal delay-6">
+        Built by Aaliyan Muhammad
+    </footer>
+
+    <script>
+        const fileInput = document.getElementById("fileInput");
+        const browseButton = document.getElementById("browseButton");
+        const dropZone = document.getElementById("dropZone");
+
+        const bpmValue = document.getElementById("bpmValue");
+        const keyValue = document.getElementById("keyValue");
+        const resultNote = document.getElementById("resultNote");
+        const statusPill = document.getElementById("statusPill");
+
+        const startMicButton = document.getElementById("startMicButton");
+        const stopMicButton = document.getElementById("stopMicButton");
+        const micStatus = document.getElementById("micStatus");
+        const micDot = document.getElementById("micDot");
+
+        let audioContext = null;
+        let mediaStream = null;
+        let processor = null;
+        let source = null;
+        let micBuffer = [];
+        let micSampleRate = 44100;
+
+        function setStatus(text, mode = "idle") {
+            statusPill.textContent = text;
+            statusPill.className = `status ${mode}`;
+        }
+
+        function animateResult(element, value) {
+            element.classList.remove("result-show");
+            void element.offsetWidth;
+            element.textContent = value;
+            element.classList.add("result-show");
+        }
+
+        function setResults(bpm, key, note) {
+            animateResult(bpmValue, bpm);
+            animateResult(keyValue, key);
+            resultNote.classList.remove("result-note-show");
+            void resultNote.offsetWidth;
+            resultNote.textContent = note;
+            resultNote.classList.add("result-note-show");
+        }
+
+        async function uploadBlob(blob, filename) {
+            const formData = new FormData();
+            formData.append("file", blob, filename);
+
+            setStatus("Analyzing", "working");
+            setResults("--", "--", "Analyzing audio...");
+
+            try {
+                const response = await fetch("/analyze", {
+                    method: "POST",
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || "Analysis failed.");
+                }
+
+                setResults(data.bpm, data.key, "Analysis complete.");
+                setStatus("Done", "done");
+
+            } catch (error) {
+                setResults("--", "--", error.message || "Could not analyze audio.");
+                setStatus("Error", "error");
+            }
+        }
+
+        browseButton.addEventListener("click", () => fileInput.click());
+
+        fileInput.addEventListener("change", async (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                await uploadBlob(file, file.name);
+            }
+        });
+
+        ["dragenter", "dragover"].forEach((eventName) => {
+            dropZone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                dropZone.classList.add("dragging");
+            });
+        });
+
+        ["dragleave", "drop"].forEach((eventName) => {
+            dropZone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                dropZone.classList.remove("dragging");
+            });
+        });
+
+        dropZone.addEventListener("drop", async (event) => {
+            const file = event.dataTransfer.files[0];
+            if (file) {
+                await uploadBlob(file, file.name);
+            }
+        });
+
+        function mergeBuffers(buffers) {
+            const length = buffers.reduce((sum, buffer) => sum + buffer.length, 0);
+            const result = new Float32Array(length);
+
+            let offset = 0;
+            for (const buffer of buffers) {
+                result.set(buffer, offset);
+                offset += buffer.length;
+            }
+
+            return result;
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
+        function floatTo16BitPCM(output, offset, input) {
+            for (let i = 0; i < input.length; i++, offset += 2) {
+                let sample = Math.max(-1, Math.min(1, input[i]));
+                sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                output.setInt16(offset, sample, true);
+            }
+        }
+
+        function encodeWav(samples, sampleRate) {
+            const buffer = new ArrayBuffer(44 + samples.length * 2);
+            const view = new DataView(buffer);
+
+            writeString(view, 0, "RIFF");
+            view.setUint32(4, 36 + samples.length * 2, true);
+            writeString(view, 8, "WAVE");
+            writeString(view, 12, "fmt ");
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, "data");
+            view.setUint32(40, samples.length * 2, true);
+
+            floatTo16BitPCM(view, 44, samples);
+
+            return new Blob([view], { type: "audio/wav" });
+        }
+
+        async function startMic() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                micSampleRate = audioContext.sampleRate;
+
+                source = audioContext.createMediaStreamSource(mediaStream);
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                micBuffer = [];
+
+                processor.onaudioprocess = (event) => {
+                    const channelData = event.inputBuffer.getChannelData(0);
+                    micBuffer.push(new Float32Array(channelData));
+                };
+
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+
+                startMicButton.disabled = true;
+                stopMicButton.disabled = false;
+                micStatus.textContent = "Listening...";
+                micDot.classList.add("active");
+
+                setStatus("Recording", "working");
+                setResults("--", "--", "Recording microphone input...");
+
+            } catch (error) {
+                setStatus("Error", "error");
+                setResults("--", "--", "Microphone access was denied or unavailable.");
+            }
+        }
+
+        async function stopMic() {
+            try {
+                if (processor) processor.disconnect();
+                if (source) source.disconnect();
+                if (mediaStream) {
+                    mediaStream.getTracks().forEach(track => track.stop());
+                }
+                if (audioContext) {
+                    await audioContext.close();
+                }
+
+                startMicButton.disabled = false;
+                stopMicButton.disabled = true;
+                micStatus.textContent = "Microphone idle";
+                micDot.classList.remove("active");
+
+                const merged = mergeBuffers(micBuffer);
+
+                if (!merged.length) {
+                    setStatus("Idle", "idle");
+                    setResults("--", "--", "No microphone audio was captured.");
+                    return;
+                }
+
+                const wavBlob = encodeWav(merged, micSampleRate);
+                await uploadBlob(wavBlob, "live-recording.wav");
+
+            } catch (error) {
+                setStatus("Error", "error");
+                setResults("--", "--", "Could not stop and analyze the microphone recording.");
+            }
+        }
+
+        startMicButton.addEventListener("click", startMic);
+        stopMicButton.addEventListener("click", stopMic);
+    </script>
+</body>
+</html>
