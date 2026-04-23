@@ -3,6 +3,11 @@ from typing import Dict, List, Tuple
 import librosa
 import numpy as np
 
+# Full-length tracks + chroma_cqt + librosa.beat.beat_track on CPU can take many minutes.
+# We cap decoded length, use fast chroma, and avoid beat_track (its DP is often multi-second).
+MAX_ANALYSIS_SECONDS = 60.0
+KEY_AUDIO_SECONDS = 30.0
+
 KEY_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 MAJOR_PROFILE = np.array([
@@ -39,60 +44,54 @@ def detect_bpm(y: np.ndarray, sr: int) -> int:
 
     _, y_percussive = librosa.effects.hpss(y)
 
+    hop_length = 1024
+
     onset_env = librosa.onset.onset_strength(
         y=y_percussive,
         sr=sr,
-        aggregate=np.median
+        aggregate=np.median,
+        hop_length=hop_length,
     )
 
     if onset_env.size == 0 or np.allclose(onset_env, 0):
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr, aggregate=np.median)
+        onset_env = librosa.onset.onset_strength(
+            y=y, sr=sr, aggregate=np.median, hop_length=hop_length
+        )
+
+    if onset_env.size == 0 or np.allclose(onset_env, 0):
+        return 0
 
     global_tempo = librosa.feature.tempo(
         onset_envelope=onset_env,
         sr=sr,
-        aggregate=np.median
+        hop_length=hop_length,
+        aggregate=np.median,
     )
 
     if isinstance(global_tempo, np.ndarray):
         global_tempo = float(global_tempo.flat[0])
 
-    beat_tempo, _ = librosa.beat.beat_track(
-        onset_envelope=onset_env,
-        sr=sr
-    )
-
-    if isinstance(beat_tempo, np.ndarray):
-        beat_tempo = float(beat_tempo.flat[0])
-
     global_tempo = _normalize_tempo(float(global_tempo))
-    beat_tempo = _normalize_tempo(float(beat_tempo))
-
-    candidates = [tempo for tempo in [global_tempo, beat_tempo] if tempo > 0]
-
-    if not candidates:
+    if global_tempo <= 0:
         return 0
 
-    if len(candidates) == 2:
-        if abs(candidates[0] - candidates[1]) <= 8:
-            bpm = (candidates[0] * 0.6) + (candidates[1] * 0.4)
-        else:
-            bpm = candidates[0]
-    else:
-        bpm = candidates[0]
+    return int(round(global_tempo))
 
-    return int(round(bpm))
+
+def _corrcoef_safe(a: np.ndarray, b: np.ndarray) -> float:
+    value = float(np.corrcoef(a, b)[0, 1])
+    return value if np.isfinite(value) else 0.0
 
 
 def _score_keys(chroma_avg: np.ndarray) -> List[Tuple[str, float]]:
     scores: List[Tuple[str, float]] = []
 
     for i in range(12):
-        major_score = np.corrcoef(chroma_avg, np.roll(MAJOR_PROFILE, i))[0, 1]
-        minor_score = np.corrcoef(chroma_avg, np.roll(MINOR_PROFILE, i))[0, 1]
+        major_score = _corrcoef_safe(chroma_avg, np.roll(MAJOR_PROFILE, i))
+        minor_score = _corrcoef_safe(chroma_avg, np.roll(MINOR_PROFILE, i))
 
-        scores.append((f"{KEY_NAMES[i]} Maj", float(major_score)))
-        scores.append((f"{KEY_NAMES[i]} Min", float(minor_score)))
+        scores.append((f"{KEY_NAMES[i]} Maj", major_score))
+        scores.append((f"{KEY_NAMES[i]} Min", minor_score))
 
     scores.sort(key=lambda item: item[1], reverse=True)
     return scores
@@ -109,7 +108,13 @@ def detect_key(y: np.ndarray, sr: int) -> str:
 
     y_harmonic, _ = librosa.effects.hpss(y)
 
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
+    # chroma_stft is far cheaper than chroma_cqt on long clips; sufficient for key guess.
+    chroma = librosa.feature.chroma_stft(
+        y=y_harmonic,
+        sr=sr,
+        n_fft=4096,
+        hop_length=512,
+    )
     chroma_avg = np.mean(chroma, axis=1)
 
     if np.allclose(chroma_avg, 0):
@@ -128,10 +133,21 @@ def detect_key(y: np.ndarray, sr: int) -> str:
 
 
 def analyze_audio(file_path: str) -> Dict[str, str]:
-    y, sr = librosa.load(file_path, sr=22050, mono=True)
+    y, sr = librosa.load(
+        file_path,
+        sr=22050,
+        mono=True,
+        duration=MAX_ANALYSIS_SECONDS,
+    )
+
+    if y.size == 0:
+        return {"bpm": "Unknown", "key": "Unknown"}
+
+    key_len = int(sr * KEY_AUDIO_SECONDS)
+    y_key = y[:key_len] if y.size > key_len else y
 
     bpm = detect_bpm(y, sr)
-    key = detect_key(y, sr)
+    key = detect_key(y_key, sr)
 
     return {
         "bpm": str(bpm) if bpm > 0 else "Unknown",
