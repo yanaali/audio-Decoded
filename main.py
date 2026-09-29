@@ -2,7 +2,6 @@ import asyncio
 import os
 import shutil
 import uuid
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -10,42 +9,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from audio_analysis import analyze_audio
+from database import SessionLocal, initialize_db
+from models import AnalysisResult, AudioUpload, User
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-def _warm_analysis_pipeline() -> None:
-    """Trigger librosa/numba once at startup so the first real upload is not stalled."""
-    import numpy as np
-    import soundfile as sf
-
-    sr = 22050
-    t = np.arange(sr * 2, dtype=np.float64) / sr
-    y = (0.05 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
-    path = os.path.join(UPLOAD_DIR, ".warmup.wav")
-    sf.write(path, y, sr)
-    try:
-        analyze_audio(path)
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(None, _warm_analysis_pipeline)
-    except Exception:
-        pass
-    yield
-
-
-app = FastAPI(title="Audio-Decoded", lifespan=lifespan)
+app = FastAPI(title="Audio-Decoded")
 
 ALLOWED_EXTENSIONS = {
     ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".webm"
@@ -54,10 +26,49 @@ ALLOWED_EXTENSIONS = {
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+INITIALIZED_DB = initialize_db()
+
 
 def _safe_extension(filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
     return ext if ext in ALLOWED_EXTENSIONS else ".wav"
+
+
+def _persist_analysis(filename: str, bpm: str, key: str, note: str, file_path: str) -> None:
+    if not INITIALIZED_DB:
+        return
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).first()
+        if user is None:
+            user = User(email="guest@audiodecoded.local")
+            db.add(user)
+            db.flush()
+
+        upload = AudioUpload(
+            user_id=user.id,
+            filename=filename,
+            file_path=file_path,
+            content_type="audio",
+            size_bytes=os.path.getsize(file_path) if os.path.exists(file_path) else 0,
+        )
+        db.add(upload)
+        db.flush()
+
+        analysis = AnalysisResult(
+            upload_id=upload.id,
+            bpm=bpm,
+            key=key,
+            note=note,
+        )
+        db.add(analysis)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -78,9 +89,18 @@ async def analyze(file: UploadFile = File(...)):
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # librosa is CPU-heavy; run off the event loop so the server stays responsive.
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, analyze_audio, file_path)
+
+        bpm = result.get("bpm", "Unknown")
+        key = result.get("key", "Unknown")
+        note = "Analysis complete."
+        try:
+            _persist_analysis(file.filename, bpm, key, note, file_path)
+        except Exception:
+            # Keep the app functional even if PostgreSQL is unavailable.
+            pass
+
         return JSONResponse(result)
 
     except Exception as exc:

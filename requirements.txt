@@ -6,3 +6,6 @@ scipy
 python-multipart
 jinja2
 soundfile
+sqlalchemy
+psycopg[binary]
+python-dotenv

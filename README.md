@@ -4,6 +4,8 @@
 
 The application allows users to upload music files through drag-and-drop or record audio directly through their microphone. Once analyzed, the system displays the detected BPM and key. If the harmonic profile suggests more than one likely key, the application will display both possibilities.
 
+The app now also includes a lightweight PostgreSQL persistence layer to store user data and analysis history for each upload.
+
 ---
 
 ## Features
@@ -22,6 +24,11 @@ The application allows users to upload music files through drag-and-drop or reco
 ### Live Microphone Analysis
 - Record audio through the browser microphone and analyze it once recording stops.
 
+### Persistent Analysis History
+- Saves upload metadata and analysis results in PostgreSQL.
+- Stores users, uploaded audio records, and analysis outcomes.
+- Keeps the app fast by only writing to the database when an analysis is triggered.
+
 ### Minimalist Interface
 - Dark themed UI with orange accents.
 - Smooth animated transitions for text and results.
@@ -31,23 +38,31 @@ The application allows users to upload music files through drag-and-drop or reco
 
 ## Tech Stack
 
-### Backend
+### Core Stack
 - **Python**
 - **FastAPI**
+- **JavaScript**
+- **HTML/CSS**
+- **PostgreSQL**
 - **Librosa**
 - **NumPy**
 - **SciPy**
 
-### Frontend
-- **HTML**
-- **CSS**
-- **JavaScript**
+### Database Layer
+- **SQLAlchemy**
+- **psycopg**
+- **PostgreSQL** for user, upload, and analysis tracking
 
 ### Audio Processing
 - Librosa DSP pipeline
 - Harmonic/percussive source separation
 - Onset strength analysis
 - Chroma feature extraction
+
+### Frontend
+- HTML
+- CSS
+- JavaScript
 
 ---
 
@@ -66,6 +81,12 @@ The application allows users to upload music files through drag-and-drop or reco
 3. The chroma profile is compared against known major and minor key profiles.
 4. The highest scoring key is selected.
 5. If two keys have very similar scores, both are returned.
+
+### Data Persistence
+1. A user upload triggers the BPM/key analysis.
+2. The result is generated in the FastAPI route.
+3. The app saves the metadata and outcome to PostgreSQL when available.
+4. If the database is offline, the app continues to function normally without slowing the page load.
 
 ---
 
@@ -91,20 +112,18 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
 venv\Scripts\Activate.ps1
 ```
 
-## Screenshots
-
-### Upload Interface
-
-![Upload Interface](screenshots/upload-ui.png)
-
-### Analysis Results
-
-![Analysis Results](screenshots/result-ui.png)
-
 Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+```
+
+Create a local PostgreSQL database named `audio_decoded`.
+
+Create a `.env` file in the project root:
+
+```env
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/audio_decoded
 ```
 
 Run the application:
@@ -115,7 +134,7 @@ python -m uvicorn main:app --reload
 
 Open in your browser:
 
-```
+```text
 http://127.0.0.1:8000
 ```
 
@@ -145,8 +164,21 @@ For best compatibility with compressed formats, installing **FFmpeg** is recomme
 4. After analysis, the application displays:
    - **BPM**
    - **Musical Key**
+5. The upload and analysis metadata can be saved to PostgreSQL when the database is available.
 
 If the algorithm detects multiple likely keys, they are displayed together (for example: `C Maj / A Min`).
+
+---
+
+## Database Schema
+
+The app includes a simple schema for:
+
+- `users`
+- `audio_uploads`
+- `analysis_results`
+
+This enables basic history tracking and future expansion into saved playlists, favorites, or searchable track data.
 
 ---
 
@@ -160,6 +192,7 @@ Potential enhancements include:
 - real-time BPM detection
 - improved key detection using machine learning models
 - cloud deployment for public access
+- searchable analysis history from PostgreSQL
 
 ---
 
