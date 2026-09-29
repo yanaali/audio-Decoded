@@ -14,6 +14,9 @@ from models import AnalysisResult, AudioUpload, User
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -23,8 +26,8 @@ ALLOWED_EXTENSIONS = {
     ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".webm"
 }
 
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 INITIALIZED_DB = initialize_db()
 
