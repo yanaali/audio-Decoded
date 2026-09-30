@@ -1,12 +1,15 @@
 from typing import Dict, List, Tuple
+import logging
+from time import perf_counter
 
 import librosa
 import numpy as np
 
-# Full-length tracks + chroma_cqt + librosa.beat.beat_track on CPU can take many minutes.
-# We cap decoded length, use fast chroma, and avoid beat_track (its DP is often multi-second).
-MAX_ANALYSIS_SECONDS = 60.0
+# Bound decoding and feature extraction for predictable CPU and memory use.
+# Estimate directly from the mix instead of separating and reconstructing audio.
+MAX_ANALYSIS_SECONDS = 30.0
 KEY_AUDIO_SECONDS = 30.0
+logger = logging.getLogger("uvicorn.error")
 
 KEY_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -42,21 +45,17 @@ def detect_bpm(y: np.ndarray, sr: int) -> int:
     if y.size == 0:
         return 0
 
-    _, y_percussive = librosa.effects.hpss(y)
-
-    hop_length = 1024
+    # Spectral flux works directly on the mix, without two inverse STFTs
+    # and the median filters required by harmonic/percussive separation.
+    hop_length = 128
 
     onset_env = librosa.onset.onset_strength(
-        y=y_percussive,
+        y=y,
         sr=sr,
-        aggregate=np.median,
+        aggregate=np.mean,
         hop_length=hop_length,
+        n_mels=64,
     )
-
-    if onset_env.size == 0 or np.allclose(onset_env, 0):
-        onset_env = librosa.onset.onset_strength(
-            y=y, sr=sr, aggregate=np.median, hop_length=hop_length
-        )
 
     if onset_env.size == 0 or np.allclose(onset_env, 0):
         return 0
@@ -106,14 +105,12 @@ def detect_key(y: np.ndarray, sr: int) -> str:
     if y.size == 0:
         return "Unknown"
 
-    y_harmonic, _ = librosa.effects.hpss(y)
-
     # chroma_stft is far cheaper than chroma_cqt on long clips; sufficient for key guess.
     chroma = librosa.feature.chroma_stft(
-        y=y_harmonic,
+        y=y,
         sr=sr,
         n_fft=4096,
-        hop_length=512,
+        hop_length=1024,
     )
     chroma_avg = np.mean(chroma, axis=1)
 
@@ -133,21 +130,29 @@ def detect_key(y: np.ndarray, sr: int) -> str:
 
 
 def analyze_audio(file_path: str) -> Dict[str, str]:
+    started = perf_counter()
     y, sr = librosa.load(
         file_path,
         sr=22050,
         mono=True,
         duration=MAX_ANALYSIS_SECONDS,
     )
+    decoded = perf_counter()
 
-    if y.size == 0:
+    if y.size == 0 or np.max(np.abs(y)) < 1e-6:
         return {"bpm": "Unknown", "key": "Unknown"}
 
     key_len = int(sr * KEY_AUDIO_SECONDS)
     y_key = y[:key_len] if y.size > key_len else y
 
     bpm = detect_bpm(y, sr)
+    tempo_done = perf_counter()
     key = detect_key(y_key, sr)
+    logger.info(
+        "Audio analysis: clip=%.1fs decode=%.2fs bpm=%.2fs key=%.2fs total=%.2fs",
+        y.size / sr, decoded - started, tempo_done - decoded,
+        perf_counter() - tempo_done, perf_counter() - started,
+    )
 
     return {
         "bpm": str(bpm) if bpm > 0 else "Unknown",

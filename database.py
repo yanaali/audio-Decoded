@@ -14,9 +14,19 @@ DATABASE_URL = os.getenv(
     "postgresql+psycopg://postgres:postgres@localhost:5432/audio_decoded",
 )
 
+# Render supplies a plain PostgreSQL URL; explicitly select our installed
+# psycopg 3 driver instead of SQLAlchemy's version-dependent default.
+if DATABASE_URL.startswith(("postgres://", "postgresql://")):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL.split("://", 1)[1]
+
 Base = declarative_base()
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    future=True,
+    connect_args={"connect_timeout": 10},
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

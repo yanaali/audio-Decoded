@@ -132,7 +132,13 @@
             resultNote.classList.add("result-note-show");
         }
 
+        let analysisInProgress = false;
+
         async function uploadBlob(blob, filename) {
+            if (analysisInProgress) return;
+            analysisInProgress = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 120000);
             const formData = new FormData();
             formData.append("file", blob, filename);
 
@@ -142,7 +148,8 @@
             try {
                 const response = await fetch("/analyze", {
                     method: "POST",
-                    body: formData
+                    body: formData,
+                    signal: controller.signal
                 });
 
                 const data = await response.json();
@@ -155,8 +162,14 @@
                 setStatus("Done", "done");
 
             } catch (error) {
-                setResults("--", "--", error.message || "Could not analyze audio.");
+                const message = error.name === "AbortError"
+                    ? "Analysis timed out. Please try a shorter audio clip."
+                    : error.message || "Could not analyze audio.";
+                setResults("--", "--", message);
                 setStatus("Error", "error");
+            } finally {
+                clearTimeout(timeout);
+                analysisInProgress = false;
             }
         }
 

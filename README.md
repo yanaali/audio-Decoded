@@ -11,7 +11,7 @@ The app now also includes a lightweight PostgreSQL persistence layer to store us
 ## Features
 
 ### BPM Detection
-- Detects the tempo of an audio track using onset-envelope analysis and beat tracking.
+- Detects the tempo of an audio excerpt using onset-envelope analysis.
 - Normalizes tempo estimates to common musical ranges.
 
 ### Musical Key Detection
@@ -55,7 +55,6 @@ The app now also includes a lightweight PostgreSQL persistence layer to store us
 
 ### Audio Processing
 - Librosa DSP pipeline
-- Harmonic/percussive source separation
 - Onset strength analysis
 - Chroma feature extraction
 
@@ -69,14 +68,12 @@ The app now also includes a lightweight PostgreSQL persistence layer to store us
 ## How It Works
 
 ### BPM Detection
-1. The audio signal is trimmed to remove silence.
-2. Harmonic-Percussive Source Separation isolates rhythmic elements.
-3. Onset strength is computed to detect rhythmic peaks.
-4. Tempo candidates are calculated using both beat tracking and global tempo estimation.
-5. The most reliable BPM estimate is selected and normalized.
+1. Decode at most the first 30 seconds at 22,050 Hz, in mono.
+2. Trim silence and compute onset strength directly from the mix.
+3. Estimate global tempo from the onset envelope and normalize the BPM range.
 
 ### Key Detection
-1. Harmonic components of the audio are extracted.
+1. Use the same bounded audio excerpt without a separate source-separation pass.
 2. Chroma features measure energy distribution across pitch classes.
 3. The chroma profile is compared against known major and minor key profiles.
 4. The highest scoring key is selected.
@@ -85,12 +82,19 @@ The app now also includes a lightweight PostgreSQL persistence layer to store us
 ### Data Persistence
 1. A user upload triggers the BPM/key analysis.
 2. The result is generated in the FastAPI route.
-3. The app saves the metadata and outcome to PostgreSQL when available.
+3. After responding, a background task saves metadata and the outcome to PostgreSQL when available.
 4. If the database is offline, the app continues to function normally without slowing the page load.
 
 ---
 
 ## Installation
+
+Analysis logs include decoding, BPM, key, and total processing times. The first
+request can take longer while audio libraries initialize. Upload time is separate
+from processing time, and the browser stops waiting after two minutes. This browser
+timeout does not cancel server processing. Estimates reflect the first 30 seconds;
+long intros or later tempo/key changes may need a different excerpt. Background
+history saving is best-effort and is not durable across server restarts.
 
 Clone the repository:
 

@@ -1,9 +1,10 @@
 import asyncio
+import logging
 import os
 import shutil
 import uuid
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -30,6 +31,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 INITIALIZED_DB = initialize_db()
+logger = logging.getLogger("uvicorn.error")
 
 
 def _safe_extension(filename: str) -> str:
@@ -37,7 +39,7 @@ def _safe_extension(filename: str) -> str:
     return ext if ext in ALLOWED_EXTENSIONS else ".wav"
 
 
-def _persist_analysis(filename: str, bpm: str, key: str, note: str, file_path: str) -> None:
+def _persist_analysis(filename: str, bpm: str, key: str, note: str, size_bytes: int) -> None:
     if not INITIALIZED_DB:
         return
 
@@ -52,9 +54,9 @@ def _persist_analysis(filename: str, bpm: str, key: str, note: str, file_path: s
         upload = AudioUpload(
             user_id=user.id,
             filename=filename,
-            file_path=file_path,
+            file_path=None,  # Temporary audio is deleted after analysis.
             content_type="audio",
-            size_bytes=os.path.getsize(file_path) if os.path.exists(file_path) else 0,
+            size_bytes=size_bytes,
         )
         db.add(upload)
         db.flush()
@@ -69,7 +71,7 @@ def _persist_analysis(filename: str, bpm: str, key: str, note: str, file_path: s
         db.commit()
     except Exception:
         db.rollback()
-        raise
+        logger.exception("Could not save analysis history.")
     finally:
         db.close()
 
@@ -83,7 +85,7 @@ async def home(request: Request):
 
 
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
+async def analyze(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided.")
 
@@ -101,11 +103,12 @@ async def analyze(file: UploadFile = File(...)):
         bpm = result.get("bpm", "Unknown")
         key = result.get("key", "Unknown")
         note = "Analysis complete."
-        try:
-            _persist_analysis(file.filename, bpm, key, note, file_path)
-        except Exception:
-            # Keep the app functional even if PostgreSQL is unavailable.
-            pass
+        # Return the result before optional database I/O. Capture the size now,
+        # because the temporary file is removed before this task runs.
+        background_tasks.add_task(
+            _persist_analysis, file.filename, bpm, key, note,
+            os.path.getsize(file_path),
+        )
 
         return JSONResponse(result)
 
