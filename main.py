@@ -76,20 +76,10 @@ def _persist_analysis(filename: str, bpm: str, key: str, note: str, file_path: s
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    try:
-        return templates.TemplateResponse("index.html", {"request": request})
-    except Exception as e:
-        # Fallback if templates fail to load
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head><title>Loading...</title></head>
-        <body style="font-family: sans-serif; text-align: center; margin-top: 50px;">
-            <p>Application is initializing. Please refresh in a moment.</p>
-            <p style="color: #666; font-size: 12px;">If this persists, there may be a server configuration issue.</p>
-        </body>
-        </html>
-        """
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html"
+    )
 
 
 @app.post("/analyze")
